@@ -26,7 +26,7 @@ if __name__ == "__main__":
                       "The directory to save the model files in.")
 
   flags.DEFINE_string(
-      "model", "PolicyGradient",
+      "model", "DQN",
       "Which architecture to use for the model. Models are defined "
       "in models.py.")
 
@@ -234,7 +234,7 @@ def main(unused_argv):
         observation, reward, done, info = env.step(action)
         reward_sum += reward
 
-        model.after_action(sess, reward, info)
+        model.after_action(sess, reward, info, x, action, observation, done)
         if done:
           episode_number += 1
 

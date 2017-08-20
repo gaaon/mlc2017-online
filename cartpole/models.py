@@ -1,5 +1,9 @@
+from collections import deque
+import random
+
 import tensorflow as tf
 import numpy as np
+
 
 class BaseModel(object):
   """Inherit from this class when implementing new models."""
@@ -8,29 +12,152 @@ class BaseModel(object):
     raise NotImplementedError()
 
 
-class QLearning(BaseModel):
+class DQN(BaseModel):
+  def __init__(self):
+    self.epsilon = 1.0
+    self.epsilon_decay = 0.999
+    self.epsilon_min = 0.01
+    self.discount_factor = 0.99
 
+    self.input_size = 4
+    self.output_size = 2
+
+    self.batch_size = 100
+    self.L_rate = 0.01
+    self.action_space = 2
+
+  def create_model(self, unused_model_input, **unused_params):
+    return DQN()
+
+  def build_graph(self, global_step):
+
+    width = 10
+
+    # network
+    observations = tf.placeholder(dtype=tf.float32, shape=[None, self.input_size], name='input_x')
+    W1 = tf.get_variable('W1', shape=[self.input_size, width], initializer=tf.contrib.layers.xavier_initializer())
+    W2 = tf.get_variable('W2', shape=[width, self.output_size], initializer=tf.contrib.layers.xavier_initializer())
+    L1 = tf.nn.tanh(tf.matmul(observations, W1))
+
+    Q_pre = tf.matmul(L1, W2)
+    input_y = tf.placeholder(dtype=tf.float32, shape=(1, self.action_space), name='input_y')
+
+    # loss
+    loss = tf.reduce_sum(tf.square(input_y - Q_pre))
+    train = tf.train.AdamOptimizer(learning_rate=self.L_rate).minimize(loss, global_step=global_step)
+
+    # return so we know what to keep
+    return {'W1': W1,
+            'W2': W2,
+            'input_y': input_y,
+            'observations': observations,
+            'loss': loss,
+            'train': train,
+            'Q_pre': Q_pre}
+
+  # These variables will be saved by the saver
+  def add_to_collection(self, results):
+    tf.add_to_collection("W1", results["W1"])
+    tf.add_to_collection("W2", results["W2"])
+    tf.add_to_collection("observations", results["observations"])
+    tf.add_to_collection("input_y", results["input_y"])
+    tf.add_to_collection("Q_pre", results["Q_pre"])
+    tf.add_to_collection("train", results["train"])
+
+  # these values will be collected from the saver to restore a trained model
+  def get_collection(self, global_step):
+    W1 = tf.get_collection("W1")[0]
+    W2 = tf.get_collection("W2")[0]
+    observations = tf.get_collection("observations")[0]
+    input_y = tf.get_collection("input_y")[0]
+    Q_pre = tf.get_collection("Q_pre")[0]
+    train = tf.get_collection("train")[0]
+
+    self.global_step = global_step
+    self.W1 = W1
+    self.W2 = W2
+    self.observations = observations
+    self.input_y = input_y
+    self.Q_pre = Q_pre
+    self.train = train
+
+    self.memory = deque(maxlen=2000)
+
+  # Before training, any initialization code
+  def before(self, sess):
+    pass
+
+  def predict(self, sess, observation):
+    s_t = np.reshape(observation, [1, self.input_size])
+    return sess.run(self.Q_pre, feed_dict={self.observations: s_t})
+
+  # Return an action
+  def get_action(self, sess, observation):
+    if np.random.rand() <= self.epsilon:
+      return random.randrange(self.output_size)
+    else:
+      q_value = np.argmax(self.predict(sess, observation))
+      return q_value
+
+  # After action has been processed by env, what to do with reward
+  def after_action(self, sess, reward, info, state, action, next_state, done):
+    x = np.reshape(next_state, [1, self.input_size])
+
+    self.memory.append([state, action, reward, x, done])
+
+  # After each episode
+  def after_episode(self, sess):
+    global_step_val = sess.run(self.global_step)
+
+    return global_step_val
+
+  # After each (bach size) episodes
+  def after_batch(self, sess):
+    if self.epsilon > self.epsilon_min:
+      self.epsilon *= self.epsilon_decay
+
+    for sample in random.sample(self.memory, self.batch_size):
+      s_r, a_r, r_r, s1_r, d_r = sample
+      Q = self.predict(sess, s_r)
+
+      if d_r:
+        Q[0, a_r] = -100
+      else:
+        Q[0, a_r] = r_r + self.discount_factor * np.max(self.predict(sess, s1_r))
+
+      sess.run(self.train, feed_dict={self.observations: np.reshape(s_r, [1, self.input_size]), self.input_y: Q})
+
+  # After training
+  def after(self):
+    # do nothing
+    pass
+
+  def collect(self):
+    pass
+
+
+class QLearning(BaseModel):
   def create_model():
     return QLearning()
 
   def build_graph(self, global_step):
-    self.H = 10 # number of hidden layer neurons
-    self.D = 4 #input dimension
-    self.learning_rate = 1e-4 #learning rate
+    self.H = 10  # number of hidden layer neurons
+    self.D = 4  # input dimension
+    self.learning_rate = 1e-4  # learning rate
 
-    observations = tf.placeholder(tf.float32, [None, self.D + 1] , name="input_x")
+    observations = tf.placeholder(tf.float32, [None, self.D + 1], name="input_x")
     W1 = tf.get_variable("W1", shape=[self.D + 1, self.H],
-                                    initializer=tf.contrib.layers.xavier_initializer())
+                         initializer=tf.contrib.layers.xavier_initializer())
     layer1 = tf.nn.relu(tf.matmul(observations, W1))
     W2 = tf.get_variable("W2", shape=[self.H, 1],
-                                    initializer=tf.contrib.layers.xavier_initializer())
+                         initializer=tf.contrib.layers.xavier_initializer())
     score = tf.matmul(layer1, W2)
     probability = tf.nn.sigmoid(score)
 
     tvars = [W1, W2]
-    advantages = tf.placeholder(tf.float32,name="reward_signal")
+    advantages = tf.placeholder(tf.float32, name="reward_signal")
 
-    loglik = tf.log((advantages - probability) + (1 - advantages)*(advantages + probability))
+    loglik = tf.log((advantages - probability) + (1 - advantages) * (advantages + probability))
     loss = -tf.reduce_mean(loglik)
 
     tvars = [W1, W2]
@@ -43,9 +170,9 @@ class QLearning(BaseModel):
     batchGrad = [W1Grad, W2Grad]
     updateGrads = adam.apply_gradients(zip(batchGrad, tvars), global_step=global_step)
 
-    return {'W1':W1,
-            'W2':W2,
-            'loss':loss,
+    return {'W1': W1,
+            'W2': W2,
+            'loss': loss,
             'observations': observations,
             'probability': probability,
             'advantages': advantages,
@@ -96,8 +223,8 @@ class QLearning(BaseModel):
 
   # Before training, any initialization code
   def before(self, sess):
-    #store observations, actions and rewards
-    self.xs, self.ys, self.rs = [],[],[]
+    # store observations, actions and rewards
+    self.xs, self.ys, self.rs = [], [], []
 
   # Return an action
   def get_action(self, sess, observation):
@@ -105,23 +232,20 @@ class QLearning(BaseModel):
     tfprob = sess.run(self.probability, feed_dict={self.observations: obs})
     action = 1 if np.random.uniform() > tfprob else 0
 
-    self.xs.append(observation) # save observation
+    self.xs.append(observation)  # save observation
     self.ys.append(action)
     return action
 
   # After action has been processed by env, what to do with reward
-  def after_action(self, sess, reward, info) :
+  def after_action(self, sess, reward, info):
     # just store the reward for later
     self.rs.append(reward)
 
   # After each episode
   def after_episode(self, sess):
-
-
     tGrad, global_step_val = sess.run([self.newGrads, self.global_step],
                                       feed_dict={self.observations: epx,
                                                  self.advantages: discounted_epr})
-
 
     sess.run(self.updateGrads, feed_dict={self.W1Grad: tGrad[0],
                                           self.W2Grad: tGrad[1]})
@@ -141,8 +265,8 @@ class QLearning(BaseModel):
   def collect(self):
     pass
 
-class PolicyGradient(BaseModel):
 
+class PolicyGradient(BaseModel):
   @staticmethod
   def create_model():
     return PolicyGradient();
@@ -150,25 +274,25 @@ class PolicyGradient(BaseModel):
   # Modify the graph below, but add return values for the graph so we can save the model
   def build_graph(self, global_step):
 
-    self.H = 10 # number of hidden layer neurons
-    self.gamma = 0.99 # discount factor for reward
-    self.D = 4 #input dimension
-    self.learning_rate = 1e-2 #learning rate
+    self.H = 10  # number of hidden layer neurons
+    self.gamma = 0.99  # discount factor for reward
+    self.D = 4  # input dimension
+    self.learning_rate = 1e-2  # learning rate
 
-    observations = tf.placeholder(tf.float32, [None, self.D] , name="input_x")
+    observations = tf.placeholder(tf.float32, [None, self.D], name="input_x")
     W1 = tf.get_variable("W1", shape=[self.D, self.H],
-                                    initializer=tf.contrib.layers.xavier_initializer())
+                         initializer=tf.contrib.layers.xavier_initializer())
     layer1 = tf.nn.relu(tf.matmul(observations, W1))
     W2 = tf.get_variable("W2", shape=[self.H, 1],
-                                    initializer=tf.contrib.layers.xavier_initializer())
+                         initializer=tf.contrib.layers.xavier_initializer())
     score = tf.matmul(layer1, W2)
     probability = tf.nn.sigmoid(score)
 
     tvars = [W1, W2]
-    input_y = tf.placeholder(tf.float32,[None,1], name="input_y")
-    advantages = tf.placeholder(tf.float32,name="reward_signal")
+    input_y = tf.placeholder(tf.float32, [None, 1], name="input_y")
+    advantages = tf.placeholder(tf.float32, name="reward_signal")
 
-    loglik = tf.log(input_y*(input_y - probability) + (1 - input_y)*(input_y + probability))
+    loglik = tf.log(input_y * (input_y - probability) + (1 - input_y) * (input_y + probability))
     loss = -tf.reduce_mean(loglik * advantages)
     newGrads = tf.gradients(loss, tvars)
 
@@ -179,9 +303,9 @@ class PolicyGradient(BaseModel):
     updateGrads = adam.apply_gradients(zip(batchGrad, tvars), global_step=global_step)
 
     # return so we know what to keep
-    return {'W1':W1,
-            'W2':W2,
-            'loss':loss,
+    return {'W1': W1,
+            'W2': W2,
+            'loss': loss,
             'observations': observations,
             'probability': probability,
             'input_y': input_y,
@@ -191,7 +315,6 @@ class PolicyGradient(BaseModel):
             'updateGrads': updateGrads,
             'tvars': tvars,
             'W2Grad': W2Grad}
-
 
   # These variables will be saved by the saver
   def add_to_collection(self, results):
@@ -235,11 +358,10 @@ class PolicyGradient(BaseModel):
     self.W2Grad = W2Grad
     self.newGrads = newGrads
 
-
   # Before training, any initialization code
   def before(self, sess):
-    #store observations, actions and rewards
-    self.xs, self.ys, self.rs = [],[],[]
+    # store observations, actions and rewards
+    self.xs, self.ys, self.rs = [], [], []
 
     # Reset the gradient placeholder. We will collect gradients in
     # gradBuffer until we are ready to update our policy network.
@@ -254,13 +376,13 @@ class PolicyGradient(BaseModel):
     tfprob = sess.run(self.probability, feed_dict={self.observations: observation})
     action = 1 if np.random.uniform() < tfprob else 0
 
-    self.xs.append(observation) # save observation
-    y = 1 if action == 0 else 0 # a "fake label"
+    self.xs.append(observation)  # save observation
+    y = 1 if action == 0 else 0  # a "fake label"
     self.ys.append(y)
     return y
 
   # After action has been processed by env, what to do with reward
-  def after_action(self, sess, reward, info) :
+  def after_action(self, sess, reward, info):
     # just store the reward for later
     self.rs.append(reward)
 
@@ -271,8 +393,8 @@ class PolicyGradient(BaseModel):
     epy = np.vstack(self.ys)
     epr = np.vstack(self.rs)
 
-    #clear episode variables
-    self.xs, self.ys, self.rs = [],[],[]
+    # clear episode variables
+    self.xs, self.ys, self.rs = [], [], []
 
     # compute the discounted reward backwards through time
     discounted_epr = PolicyGradient._discount_rewards(epr)
@@ -288,10 +410,10 @@ class PolicyGradient(BaseModel):
                                                  self.advantages: discounted_epr})
 
     # store gradients in grad buffer
-    for ix,grad in enumerate(tGrad):
+    for ix, grad in enumerate(tGrad):
       self.gradBuffer[ix] += grad
 
-    #return the global step value to the training harness
+    # return the global step value to the training harness
     return global_step_val
 
   # After each (bach size) episodes
@@ -302,9 +424,8 @@ class PolicyGradient(BaseModel):
                                           self.W2Grad: self.gradBuffer[1]})
 
     # clear the gradient buffer
-    for ix,grad in enumerate(self.gradBuffer):
+    for ix, grad in enumerate(self.gradBuffer):
       self.gradBuffer[ix] = grad * 0
-
 
   # After training
   def after(self):
