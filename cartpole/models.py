@@ -61,6 +61,7 @@ class DQN(BaseModel):
     tf.add_to_collection("W2", results["W2"])
     tf.add_to_collection("observations", results["observations"])
     tf.add_to_collection("input_y", results["input_y"])
+    tf.add_to_collection("loss", results["loss"])
     tf.add_to_collection("Q_pre", results["Q_pre"])
     tf.add_to_collection("train", results["train"])
 
@@ -72,6 +73,7 @@ class DQN(BaseModel):
     input_y = tf.get_collection("input_y")[0]
     Q_pre = tf.get_collection("Q_pre")[0]
     train = tf.get_collection("train")[0]
+    loss = tf.get_collection("loss")[0]
 
     self.global_step = global_step
     self.W1 = W1
@@ -80,6 +82,7 @@ class DQN(BaseModel):
     self.input_y = input_y
     self.Q_pre = Q_pre
     self.train = train
+    self.loss = loss
 
     self.memory = deque(maxlen=2000)
 
@@ -94,10 +97,11 @@ class DQN(BaseModel):
   # Return an action
   def get_action(self, sess, observation):
     if np.random.rand() <= self.epsilon:
-      return random.randrange(self.output_size)
+      action = random.randrange(self.output_size)
     else:
-      q_value = np.argmax(self.predict(sess, observation))
-      return q_value
+      action = np.argmax(self.predict(sess, observation))
+
+    return action
 
   # After action has been processed by env, what to do with reward
   def after_action(self, sess, reward, info, state, action, next_state, done):
@@ -107,9 +111,10 @@ class DQN(BaseModel):
 
   # After each episode
   def after_episode(self, sess):
-    global_step_val = sess.run(self.global_step)
+    pass
 
-    return global_step_val
+  def update(self, sess, x, y):
+    sess.run(self.train, feed_dict={self.observations: x, self.input_y: y})
 
   # After each (bach size) episodes
   def after_batch(self, sess):
@@ -125,7 +130,7 @@ class DQN(BaseModel):
       else:
         Q[0, a_r] = r_r + self.discount_factor * np.max(self.predict(sess, s1_r))
 
-      sess.run(self.train, feed_dict={self.observations: np.reshape(s_r, [1, self.input_size]), self.input_y: Q})
+      self.update(sess, np.reshape(s_r, [1, self.input_size]), Q)
 
   # After training
   def after(self):
