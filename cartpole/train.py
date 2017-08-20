@@ -219,6 +219,8 @@ def main(unused_argv):
 
     logging.warning("%s: Starting managed session.", task_as_string(task))
     with sv.managed_session(target, config=config) as sess:
+      print(tf.train.global_step(sess, global_step))
+      print("hhhhihihihihihihihihihi")
       rendering = FLAGS.rendering
       observation = env.reset()  # Obtain an initial observation of the environment
 
@@ -240,6 +242,8 @@ def main(unused_argv):
         reward_sum += reward
 
         model.after_action(sess, reward, info, x, action, observation, done)
+        # model.after_action(sess, reward, info)
+
         if done:
           episode_number += 1
 

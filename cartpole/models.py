@@ -15,7 +15,7 @@ class BaseModel(object):
 class DQN(BaseModel):
   def __init__(self):
     self.epsilon = 1.0
-    self.epsilon_decay = 0.999
+    self.epsilon_decay = 0.92
     self.epsilon_min = 0.01
     self.discount_factor = 0.99
 
@@ -31,7 +31,7 @@ class DQN(BaseModel):
 
   def build_graph(self, global_step):
 
-    width = 10
+    width = 30
 
     # network
     observations = tf.placeholder(dtype=tf.float32, shape=[None, self.input_size], name='input_x')
